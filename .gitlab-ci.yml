@@ -1,0 +1,88 @@
+# GitLab CI/CD — build, lint, deploy to Vercel
+#
+# Required CI/CD variables (Settings -> CI/CD -> Variables, mark protected+masked where noted):
+#   VERCEL_TOKEN        Personal token from https://vercel.com/account/tokens   (masked)
+#   VERCEL_ORG_ID       From `vercel link` -> .vercel/project.json
+#   VERCEL_PROJECT_ID   From `vercel link` -> .vercel/project.json
+#   SERPAPI_KEY         (only needed if you set it via CI; usually set in Vercel directly)
+
+stages:
+  - install
+  - validate
+  - deploy
+
+default:
+  image: node:20-alpine
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+      - .npm/
+
+install:
+  stage: install
+  script:
+    - npm ci --cache .npm --prefer-offline
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+lint:
+  stage: validate
+  needs: ["install"]
+  script:
+    - npm run lint
+
+typecheck:
+  stage: validate
+  needs: ["install"]
+  script:
+    - npm run typecheck
+
+build:
+  stage: validate
+  needs: ["install"]
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - .next/
+    expire_in: 1 hour
+
+deploy:preview:
+  stage: deploy
+  needs: ["lint", "typecheck", "build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+  script:
+    - npm install -g vercel@latest
+    - vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+    - vercel build --token=$VERCEL_TOKEN
+    - DEPLOY_URL=$(vercel deploy --prebuilt --token=$VERCEL_TOKEN)
+    - echo "Preview deployed at $DEPLOY_URL"
+    - echo "DEPLOY_URL=$DEPLOY_URL" >> deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
+
+deploy:production:
+  stage: deploy
+  needs: ["lint", "typecheck", "build"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  environment:
+    name: production
+    url: $DEPLOY_URL
+  script:
+    - npm install -g vercel@latest
+    - vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+    - vercel build --prod --token=$VERCEL_TOKEN
+    - DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN)
+    - echo "Production deployed at $DEPLOY_URL"
+    - echo "DEPLOY_URL=$DEPLOY_URL" >> deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
